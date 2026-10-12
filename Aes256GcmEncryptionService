@@ -1,0 +1,150 @@
+package com.new.example.security;
+
+import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
+import java.security.GeneralSecurityException;
+import java.security.Key;
+
+import javax.crypto.Cipher;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+
+import java.security.SecureRandom;
+
+import org.apache.commons.codec.binary.Base64;
+
+/**
+ * AES-256-GCM encryption/decryption service.
+ *
+ * Ciphertext format:
+ *
+ * ENC(v1:<base64 IV>:<base64 ciphertext>)
+ */
+public class Aes256GcmEncryptionService {
+
+    private static final String AES = "AES";
+
+    private static final String CIPHER_ALGORITHM =
+            "AES/GCM/NoPadding";
+
+    private static final int IV_LENGTH = 12;
+
+    private static final int TAG_LENGTH = 128;
+
+    private static final String VERSION = "v1";
+
+    private final AesKeyProvider keyProvider;
+
+    private final SecureRandom secureRandom =
+            new SecureRandom();
+
+    public Aes256GcmEncryptionService(
+            AesKeyProvider keyProvider) {
+
+        this.keyProvider = keyProvider;
+    }
+
+    public String encrypt(String plainText)
+            throws GeneralSecurityException {
+
+        if (plainText == null) {
+            return null;
+        }
+
+        Key key = keyProvider.getKey();
+
+        byte[] iv = new byte[IV_LENGTH];
+
+        secureRandom.nextBytes(iv);
+
+        Cipher cipher =
+                Cipher.getInstance(CIPHER_ALGORITHM);
+
+        GCMParameterSpec gcmParameterSpec =
+                new GCMParameterSpec(TAG_LENGTH, iv);
+
+        cipher.init(
+                Cipher.ENCRYPT_MODE,
+                key,
+                gcmParameterSpec);
+
+        byte[] encrypted =
+                cipher.doFinal(
+                        plainText.getBytes(
+                                Charset.forName("UTF-8")));
+
+        return "ENC("
+                + VERSION
+                + ":"
+                + Base64.encodeBase64String(iv)
+                + ":"
+                + Base64.encodeBase64String(encrypted)
+                + ")";
+    }
+
+    public String decrypt(String encryptedText)
+            throws GeneralSecurityException {
+
+        if (encryptedText == null) {
+            return null;
+        }
+
+        if (!isEncrypted(encryptedText)) {
+            throw new IllegalArgumentException(
+                    "Value is not encrypted.");
+        }
+
+        String value =
+                encryptedText.substring(
+                        4,
+                        encryptedText.length() - 1);
+
+        String[] parts = value.split(":");
+
+        if (parts.length != 3) {
+            throw new IllegalArgumentException(
+                    "Invalid encrypted value format.");
+        }
+
+        String version = parts[0];
+
+        if (!VERSION.equals(version)) {
+            throw new IllegalArgumentException(
+                    "Unsupported encryption version: "
+                    + version);
+        }
+
+        byte[] iv =
+                Base64.decodeBase64(parts[1]);
+
+        byte[] cipherText =
+                Base64.decodeBase64(parts[2]);
+
+        Key key = keyProvider.getKey();
+
+        Cipher cipher =
+                Cipher.getInstance(CIPHER_ALGORITHM);
+
+        GCMParameterSpec gcmParameterSpec =
+                new GCMParameterSpec(TAG_LENGTH, iv);
+
+        cipher.init(
+                Cipher.DECRYPT_MODE,
+                key,
+                gcmParameterSpec);
+
+        byte[] decrypted =
+                cipher.doFinal(cipherText);
+
+        return new String(
+                decrypted,
+                Charset.forName("UTF-8"));
+    }
+
+    public boolean isEncrypted(String value) {
+
+        return value != null
+                && value.startsWith("ENC(")
+                && value.endsWith(")");
+    }
+}
