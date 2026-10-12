@@ -1,0 +1,35 @@
+import java.util.HashMap;
+import java.util.Map;
+
+public enum PaymentCodeEnum {
+    NEFT("N"),
+    RTGS("R"),
+    GRPT("G"),
+    INTRA("S"),
+    DCR("S"),      // Multiple keys pointing to the code "S"
+    DD("D"),
+    APBS("A"),
+    PRPD("P"),
+    RCPD("U"),
+    LEINEFT("L");
+
+    private final String code;
+    private static final Map<String, String> LOOKUP_MAP = new HashMap<>();
+
+    static {
+        for (PaymentCodeEnum payment : values()) {
+            LOOKUP_Map.put(payment.name(), payment.code);
+        }
+    }
+
+    PaymentCodeEnum(String code) {
+        this.code = code;
+    }
+
+    public static String getCode(String paymentType) {
+        if (paymentType == null || paymentType.trim().isEmpty()) {
+            return "";
+        }
+        return LOOKUP_MAP.getOrDefault(paymentType.trim().toUpperCase(), "");
+    }
+}
