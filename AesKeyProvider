@@ -1,0 +1,59 @@
+package com.new.example.security;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.security.Key;
+import java.security.KeyStore;
+
+import javax.crypto.spec.SecretKeySpec;
+
+/**
+ * Reads the AES-256 key from a secured external location.
+ *
+ * IMPORTANT:
+ * The key must NOT be packaged inside the JAR.
+ */
+public class AesKeyProvider {
+
+    private final String keyFilePath;
+
+    public AesKeyProvider(String keyFilePath) {
+        this.keyFilePath = keyFilePath;
+    }
+
+    public Key getKey() throws IOException {
+
+        File keyFile = new File(keyFilePath);
+
+        if (!keyFile.exists()) {
+            throw new IOException(
+                "Encryption key file does not exist: " + keyFilePath);
+        }
+
+        FileInputStream fis = null;
+
+        try {
+            fis = new FileInputStream(keyFile);
+
+            byte[] keyBytes = new byte[32]; // 256 bits
+
+            int bytesRead = fis.read(keyBytes);
+
+            if (bytesRead != 32) {
+                throw new IOException(
+                    "AES-256 key must contain exactly 32 bytes.");
+            }
+
+            return new SecretKeySpec(keyBytes, "AES");
+
+        } finally {
+            if (fis != null) {
+                try {
+                    fis.close();
+                } catch (IOException ignored) {
+                }
+            }
+        }
+    }
+}
