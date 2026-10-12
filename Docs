@@ -1,0 +1,1217 @@
+Absolutely. For your Technical Specification (TS), I would document this as a security remediation/change to the existing routine framework, not simply as “encrypt password.” The key point is to clearly show current state → security gap → proposed architecture → detailed technical design → deployment/operational controls → impact/testing/rollback.
+
+Below is a detailed structure you can directly use as the basis of your TS.
+
+⸻
+
+Technical Specification
+
+Secure Storage and Retrieval of Sensitive Credentials in Backend Routine
+
+1. Document Control
+
+Include:
+
+Field	Details
+Document Name	Technical Specification – Secure Storage of Credentials in Backend Routine
+Application/Module	<Application / Module Name>
+Component	Backend Routine / Routine JAR
+Change Type	Security Remediation / Technical Enhancement
+Version	1.0
+Prepared By	<Name>
+Reviewed By	<Name>
+Approved By	<Name>
+Date	<DD-MMM-YYYY>
+Related CR	<CR Number>
+Related Security Finding	<ISD/Security Finding ID>
+
+⸻
+
+2. Purpose
+
+Suggested wording
+
+The purpose of this technical specification is to define the technical solution for securing sensitive usernames and passwords currently maintained in plaintext within the external properties configuration file used by the backend routine.
+
+The proposed solution will eliminate plaintext storage of sensitive credentials by encrypting the credentials using AES-256 encryption and maintaining the encryption key separately in a secured location with restricted access.
+
+The solution will integrate with the existing Spring ResourceBundleMessageSource based configuration mechanism to minimize impact to the existing backend routine framework and business functionality.
+
+⸻
+
+3. Background
+
+Describe the current application.
+
+Example:
+
+The backend routine is packaged as a JAR and executed within the existing enterprise application/runtime framework. The routine uses Spring-based configuration and ResourceBundleMessageSource to read configuration parameters from external properties files.
+
+Certain external-system credentials such as usernames and passwords are currently maintained in plaintext in the properties file.
+
+These properties are subsequently accessed by Java code through Spring’s ResourceBundleMessageSource.
+
+As per the security guidelines, sensitive credentials must not be maintained in plaintext. The encryption key must also be maintained separately from the encrypted credentials and must be accessible only to the authorized application/service account.
+
+⸻
+
+4. Existing Architecture
+
+This section is important because the reviewer needs to understand what exists before seeing your proposed change.
+
+4.1 Current configuration flow
+
+External Properties File
+        |
+        | username/password in plaintext
+        v
+ResourceBundleMessageSource
+        |
+        v
+Java Routine
+        |
+        v
+External System
+
+4.2 Existing properties
+
+For example:
+
+external.username=myuser
+external.password=MyPassword123
+
+4.3 Existing Java flow
+
+Conceptually:
+
+String username =
+    messageSource.getMessage(
+        "external.username",
+        null,
+        locale);
+String password =
+    messageSource.getMessage(
+        "external.password",
+        null,
+        locale);
+
+4.4 Existing problem
+
+The password is present in plaintext in:
+
+properties file
+       ↓
+deployment package/configuration
+       ↓
+server filesystem
+       ↓
+potential backups/source repositories
+
+Therefore, possession/access to the properties file may expose the credential.
+
+⸻
+
+5. Problem Statement
+
+Suggested detailed wording
+
+Sensitive credentials are currently stored in plaintext in the external properties configuration file consumed by the backend routine.
+
+This implementation creates a security risk because users/processes having access to the configuration file may be able to obtain the credentials without requiring access to the application runtime.
+
+The current implementation also does not provide adequate separation between the encrypted data and the cryptographic key.
+
+The proposed change will introduce encrypted credential storage and secure key management while preserving the existing properties-based configuration mechanism and minimizing changes to existing routine/business logic.
+
+⸻
+
+6. Security Requirement
+
+Document the security team’s requirement exactly.
+
+Requirement
+
+Sensitive credentials must not be stored in plaintext.
+
+Credentials must be encrypted using AES-256.
+
+The symmetric encryption key must be maintained separately in a secured location and must be readable only by the authorized Java application/job/service account.
+
+Then convert that into technical requirements.
+
+6.1 Functional security requirements
+
+1. Passwords shall not be stored in plaintext.
+2. Passwords shall be encrypted using AES-256.
+3. The AES key shall not be stored inside the routine JAR.
+4. The AES key shall not be stored in the same properties file as the encrypted credential.
+5. The AES key shall be maintained in an externally secured location.
+6. Access to the key shall be restricted to the application/service account.
+7. Decryption shall occur only at runtime when the credential is required.
+8. Decrypted credentials shall not be written to logs.
+9. Encryption keys shall support controlled rotation.
+10. Existing business functionality shall remain unchanged.
+
+⸻
+
+7. Proposed Solution
+
+This is your main section.
+
+7.1 Proposed architecture
+
+                  SECURE SERVER
+                  ─────────────
+        +----------------------------+
+        | Secure Key Location        |
+        |                            |
+        | AES-256 Key                |
+        | /secure/<app>/aes.key     |
+        +-------------+--------------+
+                      |
+                      | Read
+                      | restricted
+                      v
+              +---------------+
+              | Java Routine  |
+              +-------+-------+
+                      |
+                      |
+        +-------------v-------------+
+        | Aes256GcmEncryptionService|
+        +-------------+-------------+
+                      |
+                      | decrypt
+                      v
+        +----------------------------+
+        | ResourceBundleMessageSource|
+        +-------------+--------------+
+                      |
+                      v
+              Properties File
+              ----------------
+              username=myuser
+              password=ENC(...)
+                      |
+                      v
+              External System
+
+I’d actually draw this in your document using a proper architecture diagram.
+
+⸻
+
+8. Proposed Configuration Format
+
+The existing:
+
+external.username=myuser
+external.password=MyPassword123
+
+will become:
+
+external.username=myuser
+external.password=ENC(v1:<IV>:<ciphertext>)
+
+You can state:
+
+The ENC(...) prefix will identify values that require decryption. Non-sensitive properties will continue to be read without modification.
+
+For example:
+
+external.host=sftp.company.com
+external.port=22
+external.username=myuser
+external.password=ENC(v1:...)
+external.timeout=60000
+
+This is a good design because you don’t need to encrypt the entire properties file.
+
+⸻
+
+9. Encryption Algorithm
+
+Document this carefully.
+
+Recommended:
+
+Algorithm       : AES
+Key size        : 256 bits
+Mode            : GCM
+Padding         : NoPadding
+Authentication  : GCM authentication tag
+IV/Nonce        : 12 bytes
+Tag size        : 128 bits
+Encoding        : Base64
+
+Therefore:
+
+AES-256-GCM
+
+Why GCM?
+
+AES-GCM provides both confidentiality and integrity/authentication of the encrypted data. A unique IV/nonce will be generated for each encryption operation.
+
+Avoid specifying:
+
+AES/ECB/PKCS5Padding
+
+in the TS.
+
+Also don’t design your own encryption format.
+
+⸻
+
+10. Encryption Data Format
+
+Define the format clearly.
+
+For example:
+
+ENC(v1:<Base64-IV>:<Base64-Ciphertext>)
+
+Example:
+
+ENC(v1:AbCdEf123...:XyZaBc456...)
+
+Explain:
+
+Component	Description
+ENC	Indicates encrypted configuration value
+v1	Encryption format/key version
+IV	AES-GCM initialization vector
+Ciphertext	Encrypted credential
+Base64	Text-safe encoding for properties file
+
+This is useful for future key rotation.
+
+⸻
+
+11. Encryption Key Management
+
+This is probably the most important section from the security-review perspective.
+
+11.1 Key storage
+
+The AES key shall not be:
+
+* hardcoded in Java code
+* committed to Git
+* stored in the properties file
+* stored inside the JAR
+* stored alongside the encrypted password
+* printed in logs
+
+Instead:
+
+/secure/<application>/aes.key
+
+or the organization’s approved secrets/key-management system.
+
+11.2 File permissions
+
+Conceptually:
+
+Owner      : WebSphere/Application service account
+Permission : Read-only
+Access     : Restricted
+
+For example:
+
+-r-------- application_user application_group aes.key
+
+Actual ownership/permission will be finalized by infrastructure/security teams.
+
+⸻
+
+12. Key Generation
+
+Document that the key must be generated using a cryptographically secure random generator.
+
+SecureRandom
+     |
+     v
+32 bytes
+     |
+     v
+256-bit AES key
+
+Do not generate it using:
+
+timestamp
+username
+random mathematical formula
+UUID converted to bytes
+
+The key must have 256 bits of cryptographically secure randomness.
+
+⸻
+
+13. Key Access
+
+At runtime:
+
+Java Routine
+     |
+     v
+AesKeyProvider
+     |
+     v
+Secure Key Location
+     |
+     v
+AES-256 key
+
+Access should be through the application/service account.
+
+Document:
+
+The Java application will read the encryption key from the approved secure location at runtime. OS-level permissions shall restrict access to the key file to the authorized application/service account.
+
+⸻
+
+14. Class-Level Design
+
+This section should explain every new class.
+
+14.1 AesKeyProvider
+
+Responsibility
+
+Responsible for retrieving the AES-256 encryption key from the externally secured key location.
+
+Responsibilities
+
+* Validate key file existence.
+* Read key bytes.
+* Validate key length.
+* Construct SecretKey.
+* Prevent key from being embedded in application source/JAR.
+
+Flow
+
+AesKeyProvider
+     |
+     +--> locate key
+     |
+     +--> validate
+     |
+     +--> read 32 bytes
+     |
+     +--> create AES SecretKey
+     |
+     v
+Aes256GcmEncryptionService
+
+⸻
+
+15. Aes256GcmEncryptionService
+
+Responsibility
+
+Provides encryption and decryption functionality using AES-256-GCM.
+
+Methods
+
+encrypt(String plainText)
+decrypt(String encryptedText)
+isEncrypted(String value)
+
+Encryption flow
+
+Plain password
+      |
+      v
+Generate random IV
+      |
+      v
+AES-256-GCM
+      |
+      v
+Ciphertext + authentication tag
+      |
+      v
+Base64 encoding
+      |
+      v
+ENC(v1:IV:ciphertext)
+
+Decryption flow
+
+ENC(v1:IV:ciphertext)
+          |
+          v
+Parse encrypted value
+          |
+          v
+Decode Base64
+          |
+          v
+Read AES key
+          |
+          v
+AES-256-GCM decrypt
+          |
+          v
+Plain password
+
+⸻
+
+16. SecureMessageSource
+
+This class is especially relevant to your architecture.
+
+Responsibility
+
+Extends the existing Spring ResourceBundleMessageSource implementation to transparently decrypt configuration values marked with the ENC(...) prefix.
+
+Existing behavior
+
+messageSource.getMessage()
+        |
+        v
+return property value
+
+New behavior
+
+messageSource.getMessage()
+        |
+        v
+Read property
+        |
+        +---- normal value ---> return as-is
+        |
+        +---- ENC(...) -------> decrypt
+                                  |
+                                  v
+                              return plain value
+
+This means existing business/routine code can remain unchanged.
+
+⸻
+
+17. Detailed Runtime Sequence
+
+I recommend putting this sequence in the TS.
+
+1. Routine starts
+       |
+2. Spring initializes MessageSource
+       |
+3. SecureMessageSource is initialized
+       |
+4. EncryptionService is initialized
+       |
+5. Routine requests configuration property
+       |
+6. ResourceBundleMessageSource reads property
+       |
+7. SecureMessageSource checks ENC(...) prefix
+       |
+8. If normal property:
+       return value
+       |
+9. If encrypted property:
+       call decrypt()
+       |
+10. EncryptionService requests AES key
+       |
+11. AesKeyProvider reads secure key
+       |
+12. AES-256-GCM decrypts value
+       |
+13. Plain credential returned to routine
+       |
+14. Routine authenticates with external system
+
+⸻
+
+18. Spring Configuration
+
+Document your Spring XML change.
+
+Existing
+
+<bean id="messageSource"
+      class="org.springframework.context.support.ResourceBundleMessageSource">
+
+Proposed
+
+<bean id="messageSource"
+      class="com.new.example.security.SecureMessageSource">
+
+and configure:
+
+<bean id="aesKeyProvider"
+      class="com.new.example.security.AesKeyProvider">
+    <constructor-arg
+        value="/secure/<application>/aes.key"/>
+</bean>
+<bean id="encryptionService"
+      class="com.new.example.security.Aes256GcmEncryptionService">
+    <constructor-arg ref="aesKeyProvider"/>
+</bean>
+
+Then:
+
+<bean id="messageSource"
+      class="com.new.example.security.SecureMessageSource">
+    <property name="encryptionService"
+              ref="encryptionService"/>
+    ...
+</bean>
+
+⸻
+
+19. Dependency Impact
+
+This needs to be explicitly documented.
+
+Check the actual Java/WebSphere version before finalizing dependencies.
+
+Potential dependencies:
+
+Spring Framework
+Apache Commons Codec
+JDK cryptographic APIs
+
+If Base64 is already available through your application’s supported libraries, don’t unnecessarily introduce another dependency.
+
+For a legacy application, minimizing new dependencies is preferable.
+
+⸻
+
+20. Configuration Changes
+
+Create a table:
+
+Configuration	Existing	Proposed
+Username	Plaintext	Plaintext/Encrypted as per security requirement
+Password	Plaintext	AES-256-GCM encrypted
+AES key	Not applicable	Secure external location
+Key path	Not applicable	External configuration
+Message source	ResourceBundleMessageSource	SecureMessageSource
+Business code	Existing	No/minimal change
+
+⸻
+
+21. Deployment Architecture
+
+Separate DEV / UAT / PROD keys.
+
+Do NOT use the same AES key everywhere.
+
+DEV
+ |
+ +--> DEV AES key
+ |
+ +--> DEV encrypted credentials
+UAT
+ |
+ +--> UAT AES key
+ |
+ +--> UAT encrypted credentials
+PROD
+ |
+ +--> PROD AES key
+ |
+ +--> PROD encrypted credentials
+
+This is very important.
+
+Do not do:
+
+DEV AES key = PROD AES key
+
+⸻
+
+22. Environment-Specific Configuration
+
+For example:
+
+DEV
+/secure/cmp/dev/aes.key
+UAT
+/secure/cmp/uat/aes.key
+PROD
+/secure/cmp/prod/aes.key
+
+The exact paths should be finalized with infrastructure.
+
+⸻
+
+23. Source-Control Changes
+
+Document explicitly:
+
+Allowed in Git
+
+external.password=ENC(v1:...)
+
+NOT allowed in Git
+
+aes.key
+plain password
+encryption utility output containing plaintext
+production credentials
+
+Also mention:
+
+Existing plaintext credentials must be removed from source-control history where applicable according to the organization’s security/credential-rotation procedure.
+
+This is important because simply replacing the password in the current file doesn’t remove an old password from Git history.
+
+⸻
+
+24. Logging and Monitoring
+
+This deserves its own section because you have monitoring such as Dynatrace.
+
+Must not log:
+
+AES key
+plaintext password
+decrypted password
+complete connection credentials
+
+Avoid:
+
+logger.debug("Password = " + password);
+
+Even exception messages must be reviewed so that the credential isn’t accidentally included.
+
+Logging should contain:
+
+Credential decryption requested
+Credential decryption successful
+Credential decryption failed
+
+But without the secret value.
+
+For example:
+
+INFO: Secure configuration value successfully processed.
+
+Not:
+
+INFO: Password decrypted: MyPassword123
+
+⸻
+
+25. Error Handling
+
+Document expected failures.
+
+Case 1 – Key file missing
+
+Application startup/runtime
+        |
+        v
+AES key unavailable
+        |
+        v
+Decryption failure
+        |
+        v
+Routine should fail safely
+
+Case 2 – Invalid key
+
+Application should report:
+
+Invalid AES key configuration
+
+without exposing the key.
+
+Case 3 – Corrupted encrypted value
+
+Example:
+
+ENC(invalid...)
+
+The application should fail decryption and return a controlled error.
+
+Case 4 – Authentication tag failure
+
+AES-GCM detects tampering/corruption.
+
+The application should not attempt to continue with a potentially invalid password.
+
+⸻
+
+26. Fail-Safe Behavior
+
+This is important to specify.
+
+If:
+
+AES key unavailable
+
+or:
+
+decryption fails
+
+the application should not fall back to plaintext credentials.
+
+Never implement:
+
+try {
+    decrypt();
+} catch (...) {
+    useOriginalPassword();
+}
+
+That would defeat the entire security control.
+
+⸻
+
+27. Backward Compatibility
+
+You have two possible approaches.
+
+Option A — Strict
+
+Only:
+
+ENC(...)
+
+is allowed for sensitive fields.
+
+If plaintext is found:
+
+ERROR
+
+This is more secure.
+
+Option B — Transitional
+
+For a short migration period:
+
+ENC(...) → decrypt
+normal value → return unchanged
+
+But document that plaintext support is transitional and will be removed.
+
+My recommendation
+
+For your security remediation, eventually use:
+
+Sensitive property
+        |
+        +--> ENC(...) → accepted
+        |
+        +--> plaintext → reject
+
+This prevents someone from accidentally reintroducing plaintext later.
+
+⸻
+
+28. Credential Migration
+
+This should be a separate subsection.
+
+Current
+
+Plain password
+
+Migration
+
+Plain password
+      |
+      v
+Controlled encryption utility
+      |
+      v
+AES-256-GCM
+      |
+      v
+ENC(...)
+      |
+      v
+Properties file
+
+Important
+
+The plaintext password should not be:
+
+* committed to Git
+* sent through email
+* added to technical documents
+* printed in terminal logs
+* pasted into tickets
+
+⸻
+
+29. Key Rotation
+
+Document a future rotation procedure.
+
+Example:
+
+Current Key
+    V1
+     |
+     v
+encrypted credentials
+
+During rotation:
+
+Generate V2
+     |
+     v
+Re-encrypt credentials
+     |
+     v
+Deploy new encrypted properties
+     |
+     v
+Deploy/activate V2
+     |
+     v
+Retire V1
+
+Your encrypted format:
+
+ENC(v1:...)
+
+allows future identification of key/version.
+
+⸻
+
+30. Security Considerations
+
+Create a checklist.
+
+Security Control	Status
+Plaintext password removed	Required
+AES-256 encryption	Required
+GCM authentication	Required
+Key outside JAR	Required
+Key outside properties	Required
+Key restricted to service account	Required
+Key not committed to Git	Required
+No credentials in logs	Required
+No credentials in Dynatrace	Required
+Environment-specific keys	Required
+Key rotation process	Required
+Secure failure on decryption error	Required
+
+⸻
+
+31. Test Scenarios
+
+Your TS should have a detailed test matrix.
+
+Positive tests
+
+Test	Expected
+Valid encrypted password	Password successfully decrypted
+Valid username	Username returned correctly
+Multiple encrypted properties	All decrypt correctly
+Normal non-sensitive property	Returned unchanged
+Application restart	Configuration works
+Routine execution	External authentication succeeds
+
+Negative tests
+
+Test	Expected
+AES key missing	Routine fails securely
+AES key invalid	Decryption fails
+Wrong AES key	Decryption fails
+Corrupted ciphertext	Decryption fails
+Invalid ENC() format	Configuration error
+Modified ciphertext	GCM authentication failure
+Unauthorized user reads key	OS access denied
+Plaintext password supplied	Reject, after migration enforcement
+Empty encrypted value	Controlled validation error
+
+⸻
+
+32. Security Testing
+
+Mention:
+
+Static Code Analysis
+
+Verify:
+
+No hardcoded credentials
+No hardcoded AES key
+No plaintext password
+No insecure cipher
+
+ISD/SAST
+
+Run existing organization security scanning.
+
+Dependency Scan
+
+Check:
+
+new libraries
+known vulnerabilities
+license compliance
+
+Runtime Testing
+
+Verify that:
+
+AES key cannot be accessed by unauthorized OS account
+
+Log Review
+
+Search:
+
+password
+secret
+AES key
+username
+credential
+
+and ensure sensitive values aren’t appearing.
+
+⸻
+
+33. Performance Impact
+
+Explain that decryption happens only when configuration values are read.
+
+Potentially:
+
+Properties lookup
+       +
+AES-GCM decryption
+
+The overhead is expected to be negligible compared with external SFTP/database/network operations.
+
+However, don’t decrypt repeatedly inside loops.
+
+Prefer:
+
+Application initialization / credential acquisition
+              |
+              v
+decrypt once
+              |
+              v
+reuse securely for required operation
+
+subject to your credential-handling/security policy.
+
+⸻
+
+34. Memory Considerations
+
+A subtle but good technical point.
+
+Once decrypted:
+
+ENC(...)
+   ↓
+String plaintext
+
+the plaintext exists in JVM memory.
+
+Therefore:
+
+The solution protects credentials at rest. It does not eliminate the existence of plaintext credentials during runtime. The decrypted credential should be retained in memory only for the minimum required duration and must never be logged or persisted.
+
+This demonstrates good security understanding.
+
+⸻
+
+35. Deployment Procedure
+
+Document the exact sequence.
+
+Step 1
+
+Generate environment-specific AES key.
+
+Step 2
+
+Store key in approved secure location.
+
+Step 3
+
+Apply OS-level permissions.
+
+Step 4
+
+Encrypt existing credentials using controlled utility.
+
+Step 5
+
+Update properties file.
+
+Step 6
+
+Deploy updated routine JAR.
+
+Step 7
+
+Deploy/update Spring configuration.
+
+Step 8
+
+Restart/reload application if required.
+
+Step 9
+
+Execute smoke test.
+
+Step 10
+
+Validate external-system authentication.
+
+Step 11
+
+Review application/Dynatrace logs for errors and ensure no secret leakage.
+
+⸻
+
+36. Rollback Plan
+
+Don’t simply say “rollback JAR.”
+
+Because the properties format is changing.
+
+Document:
+
+Rollback JAR
++
+Rollback Spring configuration
++
+Restore compatible properties configuration
+
+However, because the old configuration contains plaintext credentials, do not recommend reverting to plaintext credentials unless explicitly approved by security.
+
+A better rollback strategy is:
+
+Previous encrypted configuration
++
+Previous application version
+
+with appropriate key availability.
+
+⸻
+
+37. Impact Analysis
+
+Application
+
+Low/medium impact.
+
+Changes are primarily limited to:
+
+Security utility classes
+Spring MessageSource configuration
+Credential properties
+Deployment configuration
+
+Business logic
+
+No functional business logic change.
+
+External systems
+
+No change to:
+
+SFTP
+MQ
+Oracle
+external APIs
+
+The external system continues receiving the same credentials.
+
+Database
+
+No DB schema change.
+
+Interfaces
+
+No interface/API contract change.
+
+Scheduling
+
+No scheduler change.
+
+Routine framework
+
+Minimal change.
+
+⸻
+
+38. Open Points / Dependencies
+
+This is where I would specifically put questions for your architecture/security/infrastructure teams.
+
+1. What is the approved secure location for the AES key?
+2. Is an enterprise Vault/CyberArk/KMS available?
+3. Is a filesystem-based key acceptable?
+4. What exact Java version is used by WebSphere?
+5. Is AES-256-GCM approved by ISD?
+6. What key rotation period is required?
+7. Who owns key generation?
+8. Who owns key rotation?
+9. Who has production access to the key?
+10. Should username also be encrypted?
+11. Should plaintext configuration values be rejected completely?
+12. How should the application behave if the key is unavailable?
+13. Are there existing organizational encryption utilities that must be used?
+14. Does production deployment require separate key provisioning?
+15. Does Dynatrace require any masking configuration?
+
+⸻
+
+39. Recommended Final Architecture
+
+For your specific legacy application, I’d show this as the final architecture:
+
+                    ┌────────────────────────────┐
+                    │     Secure Key Store       │
+                    │                            │
+                    │ AES-256 Key - PROD         │
+                    │ Key Version: V1            │
+                    └─────────────┬──────────────┘
+                                  │
+                           Restricted Read
+                                  │
+                                  ▼
+                    ┌────────────────────────────┐
+                    │       Java Routine         │
+                    │                            │
+                    │ AesKeyProvider             │
+                    │           │                │
+                    │           ▼                │
+                    │ AES256GcmEncryptionService │
+                    │           │                │
+                    │           ▼                │
+                    │ SecureMessageSource        │
+                    └─────────────┬──────────────┘
+                                  │
+                                  │ read
+                                  ▼
+                    ┌────────────────────────────┐
+                    │ External Properties File   │
+                    │                            │
+                    │ username=myuser            │
+                    │ password=ENC(v1:...)       │
+                    │ host=xxxx                  │
+                    └────────────────────────────┘
+                                  │
+                                  ▼
+                         External System
+
+The key architectural statement I’d put prominently in the TS:
+
+The encryption key and encrypted credentials shall be maintained separately. The AES-256 key shall never be embedded within the application source code, JAR, properties file or deployment package. Access to the key shall be restricted to the authorized application/service account.
+
+That sentence directly addresses the security requirement you’re trying to satisfy.
+
+⸻
+
+One important recommendation before you freeze this TS
+
+Because your project is based on a legacy Spring 2.5.6/WebSphere environment, I would add a “Technical Compatibility Assessment” section before implementation. The exact Java version matters for AES-GCM APIs, Base64 implementation, Spring bean configuration, and available security providers.
+
+If you give me your Java version + current messageSource XML configuration + one sample of the current properties structure (mask the actual password), I can next turn this into a project-ready TS with sections such as Purpose, Scope, Existing Design, Proposed Design, Detailed Class Design, Sequence Flow, Configuration Changes, Deployment Steps, Security Controls, Test Cases, Rollback and Impact Analysis, written in formal enterprise-document language.
