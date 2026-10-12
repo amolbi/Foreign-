@@ -1,0 +1,52 @@
+package com.new.example.security;
+
+import java.security.GeneralSecurityException;
+
+import org.springframework.context.support.ResourceBundleMessageSource;
+
+/**
+ * Extension of Spring ResourceBundleMessageSource
+ * that transparently decrypts ENC(...) values.
+ */
+public class SecureMessageSource
+        extends ResourceBundleMessageSource {
+
+    private Aes256GcmEncryptionService encryptionService;
+
+    public void setEncryptionService(
+            Aes256GcmEncryptionService encryptionService) {
+
+        this.encryptionService = encryptionService;
+    }
+
+    @Override
+    protected String resolveCodeWithoutArguments(
+            String code,
+            java.util.Locale locale) {
+
+        String value =
+                super.resolveCodeWithoutArguments(
+                        code,
+                        locale);
+
+        if (value == null) {
+            return null;
+        }
+
+        if (!encryptionService.isEncrypted(value)) {
+            return value;
+        }
+
+        try {
+
+            return encryptionService.decrypt(value);
+
+        } catch (GeneralSecurityException e) {
+
+            throw new IllegalStateException(
+                    "Unable to decrypt configuration value: "
+                    + code,
+                    e);
+        }
+    }
+}
