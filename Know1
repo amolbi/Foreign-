@@ -1,0 +1,476 @@
+Yes. For your legacy Spring 2.5.6/WebSphere setup, I’d keep the change isolated and make the application read the AES key from a secured external file, while the properties file contains only encrypted values.
+
+Below is a complete reference implementation using AES-256-GCM, which is preferable to AES/ECB or AES/CBC without authentication.
+
+1. AesKeyProvider.java
+
+package com.new.example.security;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.security.Key;
+import java.security.KeyStore;
+import javax.crypto.spec.SecretKeySpec;
+/**
+ * Reads the AES-256 key from a secured external location.
+ *
+ * IMPORTANT:
+ * The key must NOT be packaged inside the JAR.
+ */
+public class AesKeyProvider {
+    private final String keyFilePath;
+    public AesKeyProvider(String keyFilePath) {
+        this.keyFilePath = keyFilePath;
+    }
+    public Key getKey() throws IOException {
+        File keyFile = new File(keyFilePath);
+        if (!keyFile.exists()) {
+            throw new IOException(
+                "Encryption key file does not exist: " + keyFilePath);
+        }
+        FileInputStream fis = null;
+        try {
+            fis = new FileInputStream(keyFile);
+            byte[] keyBytes = new byte[32]; // 256 bits
+            int bytesRead = fis.read(keyBytes);
+            if (bytesRead != 32) {
+                throw new IOException(
+                    "AES-256 key must contain exactly 32 bytes.");
+            }
+            return new SecretKeySpec(keyBytes, "AES");
+        } finally {
+            if (fis != null) {
+                try {
+                    fis.close();
+                } catch (IOException ignored) {
+                }
+            }
+        }
+    }
+}
+
+⸻
+
+2. Aes256GcmEncryptionService.java
+
+This is the main encryption/decryption class.
+
+package com.new.example.security;
+import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
+import java.security.GeneralSecurityException;
+import java.security.Key;
+import javax.crypto.Cipher;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+import java.security.SecureRandom;
+import org.apache.commons.codec.binary.Base64;
+/**
+ * AES-256-GCM encryption/decryption service.
+ *
+ * Ciphertext format:
+ *
+ * ENC(v1:<base64 IV>:<base64 ciphertext>)
+ */
+public class Aes256GcmEncryptionService {
+    private static final String AES = "AES";
+    private static final String CIPHER_ALGORITHM =
+            "AES/GCM/NoPadding";
+    private static final int IV_LENGTH = 12;
+    private static final int TAG_LENGTH = 128;
+    private static final String VERSION = "v1";
+    private final AesKeyProvider keyProvider;
+    private final SecureRandom secureRandom =
+            new SecureRandom();
+    public Aes256GcmEncryptionService(
+            AesKeyProvider keyProvider) {
+        this.keyProvider = keyProvider;
+    }
+    public String encrypt(String plainText)
+            throws GeneralSecurityException {
+        if (plainText == null) {
+            return null;
+        }
+        Key key = keyProvider.getKey();
+        byte[] iv = new byte[IV_LENGTH];
+        secureRandom.nextBytes(iv);
+        Cipher cipher =
+                Cipher.getInstance(CIPHER_ALGORITHM);
+        GCMParameterSpec gcmParameterSpec =
+                new GCMParameterSpec(TAG_LENGTH, iv);
+        cipher.init(
+                Cipher.ENCRYPT_MODE,
+                key,
+                gcmParameterSpec);
+        byte[] encrypted =
+                cipher.doFinal(
+                        plainText.getBytes(
+                                Charset.forName("UTF-8")));
+        return "ENC("
+                + VERSION
+                + ":"
+                + Base64.encodeBase64String(iv)
+                + ":"
+                + Base64.encodeBase64String(encrypted)
+                + ")";
+    }
+    public String decrypt(String encryptedText)
+            throws GeneralSecurityException {
+        if (encryptedText == null) {
+            return null;
+        }
+        if (!isEncrypted(encryptedText)) {
+            throw new IllegalArgumentException(
+                    "Value is not encrypted.");
+        }
+        String value =
+                encryptedText.substring(
+                        4,
+                        encryptedText.length() - 1);
+        String[] parts = value.split(":");
+        if (parts.length != 3) {
+            throw new IllegalArgumentException(
+                    "Invalid encrypted value format.");
+        }
+        String version = parts[0];
+        if (!VERSION.equals(version)) {
+            throw new IllegalArgumentException(
+                    "Unsupported encryption version: "
+                    + version);
+        }
+        byte[] iv =
+                Base64.decodeBase64(parts[1]);
+        byte[] cipherText =
+                Base64.decodeBase64(parts[2]);
+        Key key = keyProvider.getKey();
+        Cipher cipher =
+                Cipher.getInstance(CIPHER_ALGORITHM);
+        GCMParameterSpec gcmParameterSpec =
+                new GCMParameterSpec(TAG_LENGTH, iv);
+        cipher.init(
+                Cipher.DECRYPT_MODE,
+                key,
+                gcmParameterSpec);
+        byte[] decrypted =
+                cipher.doFinal(cipherText);
+        return new String(
+                decrypted,
+                Charset.forName("UTF-8"));
+    }
+    public boolean isEncrypted(String value) {
+        return value != null
+                && value.startsWith("ENC(")
+                && value.endsWith(")");
+    }
+}
+
+One compatibility note: GCMParameterSpec requires a sufficiently modern Java runtime. If your WebSphere JVM is using an old Java version, tell me the exact Java version (java -version), because we should adjust this before putting the code into your project.
+
+⸻
+
+3. SecureMessageSource.java
+
+This is the class that connects your existing ResourceBundleMessageSource to the decryption logic.
+
+Instead of changing every existing routine’s code, you can centralize the decryption.
+
+package com.new.example.security;
+import java.security.GeneralSecurityException;
+import org.springframework.context.support.ResourceBundleMessageSource;
+/**
+ * Extension of Spring ResourceBundleMessageSource
+ * that transparently decrypts ENC(...) values.
+ */
+public class SecureMessageSource
+        extends ResourceBundleMessageSource {
+    private Aes256GcmEncryptionService encryptionService;
+    public void setEncryptionService(
+            Aes256GcmEncryptionService encryptionService) {
+        this.encryptionService = encryptionService;
+    }
+    @Override
+    protected String resolveCodeWithoutArguments(
+            String code,
+            java.util.Locale locale) {
+        String value =
+                super.resolveCodeWithoutArguments(
+                        code,
+                        locale);
+        if (value == null) {
+            return null;
+        }
+        if (!encryptionService.isEncrypted(value)) {
+            return value;
+        }
+        try {
+            return encryptionService.decrypt(value);
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException(
+                    "Unable to decrypt configuration value: "
+                    + code,
+                    e);
+        }
+    }
+}
+
+This is the important part for your existing architecture.
+
+Your existing code can continue doing:
+
+String username =
+        messageSource.getMessage(
+                "sftp.username",
+                null,
+                locale);
+String password =
+        messageSource.getMessage(
+                "sftp.password",
+                null,
+                locale);
+
+The application doesn’t need to explicitly call:
+
+decrypt(password);
+
+because SecureMessageSource handles it.
+
+⸻
+
+4. Spring configuration
+
+Since your application is using the older Spring XML configuration rather than modern application.properties, you can configure it in your existing Spring XML.
+
+For example:
+
+<bean id="aesKeyProvider"
+      class="com.new.example.security.AesKeyProvider">
+    <constructor-arg
+        value="/secure/cmp/aes.key" />
+</bean>
+<bean id="encryptionService"
+      class="com.new.example.security.Aes256GcmEncryptionService">
+    <constructor-arg ref="aesKeyProvider" />
+</bean>
+<bean id="messageSource"
+      class="com.new.example.security.SecureMessageSource">
+    <property name="basenames">
+        <list>
+            <value>routine</value>
+        </list>
+    </property>
+    <property name="defaultEncoding"
+              value="UTF-8" />
+    <property name="encryptionService"
+              ref="encryptionService" />
+</bean>
+
+If your current application has something like:
+
+<bean id="messageSource"
+      class="org.springframework.context.support.ResourceBundleMessageSource">
+
+you replace that class with:
+
+class="com.new.example.security.SecureMessageSource"
+
+The rest can remain substantially the same.
+
+⸻
+
+5. Properties file
+
+Your current:
+
+sftp.username=myuser
+sftp.password=MyPassword123
+
+becomes:
+
+sftp.username=myuser
+sftp.password=ENC(v1:....)
+
+The actual encrypted value should be generated using the encryption utility below.
+
+⸻
+
+6. CredentialEncryptionTool.java
+
+You need a separate utility to initially encrypt the passwords.
+
+Do not put this functionality into your production routine’s normal execution path.
+
+package com.new.example.security.tool;
+import com.new.example.security.AesKeyProvider;
+import com.new.example.security.Aes256GcmEncryptionService;
+public class CredentialEncryptionTool {
+    public static void main(String[] args)
+            throws Exception {
+        if (args.length != 2) {
+            System.out.println(
+                    "Usage: CredentialEncryptionTool "
+                    + "<key-file> <plain-text>");
+            System.exit(1);
+        }
+        String keyFile = args[0];
+        String plainText = args[1];
+        AesKeyProvider keyProvider =
+                new AesKeyProvider(keyFile);
+        Aes256GcmEncryptionService service =
+                new Aes256GcmEncryptionService(
+                        keyProvider);
+        String encrypted =
+                service.encrypt(plainText);
+        System.out.println(encrypted);
+    }
+}
+
+Then, conceptually:
+
+plain password
+      |
+      v
+CredentialEncryptionTool
+      |
+      v
+AES-256-GCM
+      |
+      v
+ENC(v1:...)
+
+You put that ENC(...) value into the properties file.
+
+⸻
+
+7. AesKeyGenerator.java
+
+You need to generate the AES-256 key initially.
+
+package com.new.example.security.tool;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.security.SecureRandom;
+public class AesKeyGenerator {
+    public static void main(String[] args)
+            throws Exception {
+        if (args.length != 1) {
+            System.out.println(
+                    "Usage: AesKeyGenerator <key-file>");
+            System.exit(1);
+        }
+        String keyFilePath = args[0];
+        byte[] key = new byte[32];
+        SecureRandom secureRandom =
+                new SecureRandom();
+        secureRandom.nextBytes(key);
+        File keyFile =
+                new File(keyFilePath);
+        FileOutputStream fos = null;
+        try {
+            fos = new FileOutputStream(keyFile);
+            fos.write(key);
+            fos.flush();
+        } finally {
+            if (fos != null) {
+                fos.close();
+            }
+        }
+        System.out.println(
+                "AES-256 key generated successfully.");
+    }
+}
+
+For example, your infrastructure team could create:
+
+/secure/cmp/aes.key
+
+The application server account gets read permission.
+
+⸻
+
+8. Final project structure
+
+I’d keep it approximately like this:
+
+com.new.example
+│
+├── security
+│   │
+│   ├── AesKeyProvider.java
+│   ├── Aes256GcmEncryptionService.java
+│   └── SecureMessageSource.java
+│
+└── security.tool
+    │
+    ├── AesKeyGenerator.java
+    └── CredentialEncryptionTool.java
+
+The two classes under:
+
+security.tool
+
+are not required in the production JAR.
+
+That’s important.
+
+Production should basically have:
+
+AesKeyProvider
+Aes256GcmEncryptionService
+SecureMessageSource
+
+while the encryption/key-generation utilities can be kept separately.
+
+⸻
+
+9. Runtime flow in your actual routine
+
+Your existing routine probably does something conceptually like:
+
+String userName =
+        messageSource.getMessage(
+                "sftp.username",
+                null,
+                locale);
+String password =
+        messageSource.getMessage(
+                "sftp.password",
+                null,
+                locale);
+
+After the change:
+
+                 routine.properties
+                       |
+                       |
+                 ENC(v1:....)
+                       |
+                       v
+             SecureMessageSource
+                       |
+                       v
+          Aes256GcmEncryptionService
+                       |
+                       v
+               AesKeyProvider
+                       |
+                       v
+               /secure/cmp/aes.key
+                       |
+                       v
+                  AES-256-GCM
+                       |
+                       v
+                Plain password
+                       |
+                       v
+                SFTP connection
+
+So your business/routine code doesn’t need to know about encryption.
+
+That is the approach I would prefer for your old routine framework.
+
+One important correction before you implement
+
+I would not directly deploy the above code yet until we establish your actual runtime Java version and Spring version. You previously mentioned Spring 2.5.6-era framework/JARs and WebSphere, so Java compatibility is particularly important.
+
+If you give me your WebSphere Java version (java -version) and the current messageSource Spring XML bean, I can tailor these classes to your exact legacy environment—including the required imports/dependencies and avoiding APIs your JVM doesn’t support.
